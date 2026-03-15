@@ -98,7 +98,7 @@ export default function Footer() {
 
         <div className="border-t border-gray-800 mt-12 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
           <p>© {new Date().getFullYear()} {APP_NAME}. All rights reserved. Made with ❤️ in Nigeria.</p>
-          <p>Payments secured by <span className="text-white font-medium">Paystack</span></p>
+          <p>Payments secured by <span className="text-white font-medium">Flutterwave</span></p>
         </div>
       </div>
     </footer>
