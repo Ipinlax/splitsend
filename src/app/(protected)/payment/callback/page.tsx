@@ -14,37 +14,52 @@ export default function PaymentCallbackPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const ref = searchParams.get("reference") ?? searchParams.get("ref");
-    const mid = searchParams.get("match_id") ?? searchParams.get("mid");
+    // Flutterwave callback params (replaces Paystack ?reference= and ?match_id=)
+    const flw_status = searchParams.get("status");
+    const transaction_id = searchParams.get("transaction_id");
+    const tx_ref = searchParams.get("tx_ref");
 
-    if (!ref || !mid) {
+    // User cancelled or payment failed on Flutterwave side
+    if (flw_status === "cancelled" || flw_status === "failed") {
       setStatus("failed");
-      setError("Missing payment reference. Please contact admin.");
+      setError("Payment was not completed. No charge was made.");
       return;
     }
 
-    setMatchId(mid);
+    if (!transaction_id || !tx_ref) {
+      setStatus("failed");
+      setError("Missing payment details. Please contact admin.");
+      return;
+    }
 
-    fetch("/api/payments/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reference: ref, match_id: mid }),
-    })
+    const qs = new URLSearchParams({
+      transaction_id,
+      tx_ref,
+      status: flw_status ?? "",
+    });
+
+    fetch(`/api/payments/verify?${qs.toString()}`)
       .then((r) => r.json())
       .then((json) => {
-        if (json.success) {
-          if (json.data?.already_verified) {
-            setStatus("already_paid");
-          } else if (json.data?.verified) {
-            setStatus("success");
-            setBothPaid(json.data.both_paid ?? false);
-          } else {
-            setStatus("failed");
-            setError("Payment was not successful. No charge was made.");
-          }
-        } else {
+        if (json.error) {
           setStatus("failed");
           setError(json.error ?? "Verification failed. Contact admin if you were charged.");
+          return;
+        }
+
+        if (json.already_verified) {
+          setMatchId(json.match_id ?? null);
+          setStatus("already_paid");
+          return;
+        }
+
+        if (json.verified) {
+          setMatchId(json.match_id ?? null);
+          setStatus("success");
+          setBothPaid(json.contacts_revealed ?? false);
+        } else {
+          setStatus("failed");
+          setError(json.message ?? "Payment was not successful. No charge was made.");
         }
       })
       .catch(() => {
@@ -65,7 +80,7 @@ export default function PaymentCallbackPage() {
               <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
             </div>
             <h2 className="font-display font-bold text-xl text-gray-900 mb-2">Verifying Payment…</h2>
-            <p className="text-sm text-gray-500">Please wait while we confirm your payment with Paystack.</p>
+            <p className="text-sm text-gray-500">Please wait while we confirm your payment.</p>
           </>
         )}
 
@@ -118,7 +133,7 @@ export default function PaymentCallbackPage() {
                 size="md"
                 fullWidth
                 label="Contact Admin on WhatsApp"
-                message={`Hello SplitSend Admin, I had a payment issue. Match ID: ${matchId ?? "unknown"}. Please help.`}
+                message={`Hello SplitSend Admin, I had a payment issue. TX Ref: ${searchParams.get("tx_ref") ?? "unknown"}. Please help.`}
               />
               <button onClick={() => router.push("/dashboard")} className="btn-secondary w-full justify-center text-sm">
                 Back to Dashboard
@@ -126,6 +141,7 @@ export default function PaymentCallbackPage() {
             </div>
           </>
         )}
+
       </div>
     </div>
   );
