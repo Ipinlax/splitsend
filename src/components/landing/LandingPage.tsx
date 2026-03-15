@@ -47,7 +47,7 @@ const CATEGORIES = [
 ];
 
 const TRUST_POINTS = [
-  { icon: Shield, title: "Secure Payments", desc: "All payments processed via Paystack — Nigeria's trusted gateway." },
+  { icon: Shield, title: "Secure Payments", desc: "All payments processed via Flutterwave — Nigeria's trusted gateway." },
   { icon: MapPin, title: "Location-Based", desc: "Match with people in your city first. No guesswork." },
   { icon: Zap, title: "Fast Matching", desc: "Smart algorithm finds your best match in seconds." },
   { icon: CheckCircle, title: "Verified Payments", desc: "Contact details only revealed after both parties pay." },
@@ -84,7 +84,7 @@ const STATS = [
   { value: "₦50k+", label: "Avg savings per user" },
   { value: "48hrs", label: "Average match time" },
   { value: "Lagos • Abuja • PH", label: "Key cities covered" },
-  { value: "100%", label: "Paystack secured" },
+  { value: "100%", label: "Flutterwave secured" },
 ];
 
 export default function LandingPage() {
