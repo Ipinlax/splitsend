@@ -1,89 +1,150 @@
-// POST /api/payments/initialize — Initialize payment for existing match
-import { NextRequest } from "next/server";
-import { getServerUser, createAdminClient } from "@/lib/supabase/server";
-import { uuidSchema } from "@/lib/validation";
+import { NextRequest, NextResponse } from "next/server";
+import { createServerClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server";
 import { withRateLimit } from "@/lib/rateLimit";
-import { initializePaystackTransaction, generatePaymentReference } from "@/lib/paystack";
-import { logger } from "@/lib/logger";
-import { errorResponse, successResponse } from "@/lib/utils";
-import { CONNECTION_FEE_KOBO, APP_URL } from "@/constants";
+import { initializePayment } from "@/lib/flutterwave";
 import { z } from "zod";
 
-const schema = z.object({ match_id: uuidSchema });
+const schema = z.object({
+  match_id: z.string().uuid(),
+});
 
-export async function POST(request: NextRequest) {
-  const rl = withRateLimit(request, "api/payments/init", { max: 10, windowMs: 300_000 });
-  if (rl) return rl;
+export async function POST(req: NextRequest) {
+  const rateLimitResponse = withRateLimit(req, "payment-init");
+  if (rateLimitResponse) return rateLimitResponse;
 
-  const user = await getServerUser();
-  if (!user) return errorResponse("Authentication required.", 401, "UNAUTHORIZED");
-
-  let body: unknown;
-  try { body = await request.json(); } catch { return errorResponse("Invalid request body.", 400); }
-
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) return errorResponse("Invalid match ID.", 400);
-
-  const { match_id } = parsed.data;
-  const adminClient = createAdminClient();
-
-  // Verify match belongs to this user
-  const { data: match } = await adminClient
-    .from("matches")
-    .select("id, initiator_user_id, partner_user_id, status")
-    .eq("id", match_id)
-    .or(`initiator_user_id.eq.${user.id},partner_user_id.eq.${user.id}`)
-    .single();
-
-  if (!match) return errorResponse("Match not found.", 404);
-  if (match.status === "both_paid" || match.status === "completed") {
-    return errorResponse("Payment already completed for this match.", 400);
-  }
-
-  // Check if user already paid
-  const { data: existingPayment } = await adminClient
-    .from("payments")
-    .select("id, status")
-    .eq("match_id", match_id)
-    .eq("user_id", user.id)
-    .single();
-
-  if (existingPayment?.status === "success") {
-    return errorResponse("You have already paid for this connection.", 400, "ALREADY_PAID");
-  }
-
-  const reference = generatePaymentReference(user.id);
-  const callbackUrl = `${APP_URL}/payment/callback?reference=${reference}&match_id=${match_id}`;
-
-  let paystackData;
   try {
-    paystackData = await initializePaystackTransaction({
+    const body = await req.json();
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Invalid request", details: parsed.error.flatten() },
+        { status: 400 }
+      );
+    }
+
+    const { match_id } = parsed.data;
+
+    const user = await getServerUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const supabase = await createServerClient();
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("full_name, is_suspended")
+      .eq("id", user.id)
+      .single();
+
+    if (profileError || !profile) {
+      return NextResponse.json({ error: "Profile not found" }, { status: 404 });
+    }
+
+    if (profile.is_suspended) {
+      return NextResponse.json(
+        { error: "Account is suspended" },
+        { status: 403 }
+      );
+    }
+
+    const { data: match, error: matchError } = await supabase
+      .from("matches")
+      .select("id, initiator_user_id, partner_user_id, status")
+      .eq("id", match_id)
+      .single();
+
+    if (matchError || !match) {
+      return NextResponse.json({ error: "Match not found" }, { status: 404 });
+    }
+
+    const isParticipant =
+      match.initiator_user_id === user.id ||
+      match.partner_user_id === user.id;
+
+    if (!isParticipant) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    if (match.status === "completed") {
+      return NextResponse.json(
+        { error: "Match already completed" },
+        { status: 400 }
+      );
+    }
+
+    const { data: existingPayment } = await supabase
+      .from("payments")
+      .select("id, status")
+      .eq("match_id", match_id)
+      .eq("user_id", user.id)
+      .single();
+
+    if (existingPayment?.status === "success") {
+      return NextResponse.json(
+        { error: "You have already paid for this match" },
+        { status: 400 }
+      );
+    }
+
+    const amount_kobo = parseInt(process.env.CONNECTION_FEE_KOBO ?? "200000");
+    const amount_ngn = amount_kobo / 100;
+
+    const tx_ref = `splitsend-${match_id}-${user.id}-${Date.now()}`;
+    const redirect_url = `${process.env.NEXT_PUBLIC_APP_URL}/payment/callback`;
+
+    const result = await initializePayment({
+      tx_ref,
+      amount_ngn,
       email: user.email!,
-      amountKobo: CONNECTION_FEE_KOBO,
-      reference,
-      metadata: { match_id, user_id: user.id, type: "connection_fee" },
-      callbackUrl,
+      full_name: profile.full_name ?? "SplitSend User",
+      redirect_url,
+      description: `SplitSend connect fee — Match ${match_id.slice(0, 8)}`,
     });
-  } catch {
-    return errorResponse("Failed to initialize payment. Please try again.", 500);
+
+    if (!result.success || !result.payment_url) {
+      console.error("[payment/initialize] Flutterwave error:", result.error);
+      return NextResponse.json(
+        { error: "Failed to initialize payment" },
+        { status: 502 }
+      );
+    }
+
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? null;
+
+    const { error: upsertError } = await supabase
+      .from("payments")
+      .upsert(
+        {
+          match_id,
+          user_id: user.id,
+          amount_kobo,
+          currency: "NGN",
+          status: "pending",
+          paystack_reference: tx_ref,
+          paystack_access_code: result.payment_url,
+          ip_address: ip,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "match_id,user_id" }
+      );
+
+    if (upsertError) {
+      console.error("[payment/initialize] DB upsert error:", upsertError);
+      return NextResponse.json(
+        { error: "Failed to record payment" },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ payment_url: result.payment_url });
+  } catch (err) {
+    console.error("[payment/initialize] Unexpected error:", err);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
-
-  // Upsert payment record
-  await adminClient.from("payments").upsert({
-    match_id,
-    user_id: user.id,
-    paystack_reference: reference,
-    paystack_access_code: paystackData.data.access_code,
-    amount_kobo: CONNECTION_FEE_KOBO,
-    currency: "NGN",
-    status: "pending",
-  }, { onConflict: "match_id,user_id", ignoreDuplicates: false });
-
-  logger.security.paymentInit(user.id, match_id, reference);
-
-  return successResponse({
-    payment_url: paystackData.data.authorization_url,
-    reference,
-    match_id,
-  });
 }
