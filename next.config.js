@@ -1,9 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Security: force HTTPS redirects, strict mode
   reactStrictMode: true,
 
-  // Security headers applied to all routes
   async headers() {
     return [
       {
@@ -26,11 +24,10 @@ const nextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.paystack.co",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.paystack.co",
-              "frame-src https://js.paystack.co",
+              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.flutterwave.com",
               "img-src 'self' data: blob: https:",
             ].join("; "),
           },
@@ -39,18 +36,11 @@ const nextConfig = {
     ];
   },
 
-  // Prevent exposing server details
   poweredByHeader: false,
-
-  // Only NEXT_PUBLIC_ vars are safe to expose to client
   env: {},
-
-  // Image domains if needed
   images: {
     remotePatterns: [],
   },
-
-  // Redirect www to non-www in production
   async redirects() {
     return [];
   },
