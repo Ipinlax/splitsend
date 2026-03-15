@@ -24,7 +24,7 @@ export default async function PrivacyPage() {
                 <li><strong>Account:</strong> Email address and optional phone number on signup</li>
                 <li><strong>Request:</strong> First name, profession, location (state/city), destination country, preferred send date, courier preference, document type, notes</li>
                 <li><strong>Private contact:</strong> Full name and WhatsApp number — stored encrypted, revealed only after verified mutual payment</li>
-                <li><strong>Payment:</strong> Paystack transaction references and status (we never store card details)</li>
+                <li><strong>Payment:</strong> Flutterwave transaction references and status (we never store card details)</li>
                 <li><strong>Support messages:</strong> Name, WhatsApp, email, and message content you submit voluntarily</li>
               </ul>
             </section>
@@ -33,7 +33,7 @@ export default async function PrivacyPage() {
               <h2 className="font-display font-bold text-xl text-gray-900 mb-3">How We Use Your Data</h2>
               <ul className="list-disc pl-5 space-y-1">
                 <li>Matching you with compatible document-sending partners</li>
-                <li>Processing and verifying your ₦2,000 connection fee via Paystack</li>
+                <li>Processing and verifying your ₦2,000 connection fee via Flutterwave</li>
                 <li>Revealing contact details only after both parties' payments are confirmed</li>
                 <li>Sending in-app notifications about your matches</li>
                 <li>Responding to support requests</li>
@@ -48,7 +48,7 @@ export default async function PrivacyPage() {
             <section>
               <h2 className="font-display font-bold text-xl text-gray-900 mb-3">Third Parties</h2>
               <ul className="list-disc pl-5 space-y-1">
-                <li><strong>Paystack:</strong> Handles payment processing. See <a href="https://paystack.com/privacy" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Paystack Privacy Policy</a></li>
+                <li><strong>Flutterwave:</strong> Handles payment processing. See <a href="https://flutterwave.com/us/privacy-policy" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Flutterwave Privacy Policy</a></li>
                 <li><strong>Supabase:</strong> Hosts our database with Row Level Security policies</li>
                 <li>We do not sell or share your data with advertisers</li>
               </ul>
