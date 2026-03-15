@@ -1,171 +1,181 @@
-// POST /api/payments/verify
-// SECURITY: All payment verification happens server-side.
-// Never trust frontend payment success — always verify with Paystack API.
-import { NextRequest } from "next/server";
-import { getServerUser, createAdminClient } from "@/lib/supabase/server";
-import { verifyPaymentSchema } from "@/lib/validation";
+import { NextRequest, NextResponse } from "next/server";
+import { createServerClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server";
 import { withRateLimit } from "@/lib/rateLimit";
-import { verifyPaystackTransaction } from "@/lib/paystack";
-import { logger } from "@/lib/logger";
-import { errorResponse, successResponse } from "@/lib/utils";
-import { CONNECTION_FEE_KOBO } from "@/constants";
+import { verifyPayment } from "@/lib/flutterwave";
 
-export async function POST(request: NextRequest) {
-  const rl = withRateLimit(request, "api/payments/verify", { max: 10, windowMs: 60_000 });
-  if (rl) return rl;
+export async function GET(req: NextRequest) {
+  const rateLimitResponse = withRateLimit(req, "payment-verify");
+  if (rateLimitResponse) return rateLimitResponse;
 
-  const user = await getServerUser();
-  if (!user) return errorResponse("Authentication required.", 401, "UNAUTHORIZED");
-
-  let body: unknown;
-  try { body = await request.json(); } catch { return errorResponse("Invalid request body.", 400); }
-
-  const parsed = verifyPaymentSchema.safeParse(body);
-  if (!parsed.success) return errorResponse("Invalid verification data.", 400, "VALIDATION_ERROR");
-
-  const { reference, match_id } = parsed.data;
-  const adminClient = createAdminClient();
-
-  // Find the payment record — must belong to this user
-  const { data: paymentRecord } = await adminClient
-    .from("payments")
-    .select("id, status, amount_kobo, user_id, match_id, webhook_processed")
-    .eq("paystack_reference", reference)
-    .eq("user_id", user.id)
-    .eq("match_id", match_id)
-    .single();
-
-  if (!paymentRecord) {
-    logger.warn("Payment record not found", { reference, userId: user.id });
-    return errorResponse("Payment record not found.", 404, "NOT_FOUND");
-  }
-
-  // Prevent re-processing already verified payment
-  if (paymentRecord.status === "success") {
-    logger.warn("Duplicate payment verify attempt", { reference, userId: user.id });
-    return successResponse({ already_verified: true, status: "success" });
-  }
-
-  // Verify with Paystack server-side
-  let paystackResult;
   try {
-    paystackResult = await verifyPaystackTransaction(reference);
-  } catch (err) {
-    logger.error("Paystack verification error", { reference, userId: user.id });
-    return errorResponse("Payment verification failed. Please contact support.", 500);
-  }
+    const { searchParams } = new URL(req.url);
+    const transaction_id = searchParams.get("transaction_id");
+    const tx_ref = searchParams.get("tx_ref");
+    const status = searchParams.get("status");
 
-  const txData = paystackResult.data;
-
-  // Validate amount — prevent partial payment exploits
-  if (txData.amount < CONNECTION_FEE_KOBO) {
-    logger.warn("Underpayment detected", { reference, expected: CONNECTION_FEE_KOBO, received: txData.amount });
-    await adminClient.from("payments").update({ status: "failed", gateway_response: "Underpayment" })
-      .eq("id", paymentRecord.id);
-    return errorResponse("Payment amount does not match the required fee.", 400, "UNDERPAYMENT");
-  }
-
-  const paymentStatus = txData.status === "success" ? "success" : txData.status === "abandoned" ? "abandoned" : "failed";
-
-  // Update payment record
-  await adminClient.from("payments").update({
-    status: paymentStatus,
-    verified_at: new Date().toISOString(),
-    gateway_response: txData.gateway_response,
-    channel: txData.channel,
-    ip_address: txData.ip_address,
-    webhook_processed: true,
-  }).eq("id", paymentRecord.id);
-
-  if (paymentStatus !== "success") {
-    return successResponse({ status: paymentStatus, message: "Payment was not successful." });
-  }
-
-  logger.security.paymentVerified(user.id, match_id, reference, paymentStatus);
-
-  // Update match status and check if both have paid
-  const { data: match } = await adminClient
-    .from("matches")
-    .select("id, initiator_user_id, partner_user_id, status")
-    .eq("id", match_id)
-    .single();
-
-  if (!match) return errorResponse("Match not found.", 404);
-
-  const isInitiator = match.initiator_user_id === user.id;
-
-  // Check if the other party has also paid
-  const otherUserId = isInitiator ? match.partner_user_id : match.initiator_user_id;
-  const { data: otherPayment } = await adminClient
-    .from("payments")
-    .select("id, status")
-    .eq("match_id", match_id)
-    .eq("user_id", otherUserId)
-    .eq("status", "success")
-    .single();
-
-  const bothPaid = !!otherPayment;
-  const now = new Date().toISOString();
-
-  if (bothPaid) {
-    // Both paid — reveal contacts and update match status
-    await adminClient.from("matches").update({
-      status: "both_paid",
-      both_paid_at: now,
-      initiator_contact_revealed: true,
-      partner_contact_revealed: true,
-      ...(isInitiator ? { initiator_paid_at: now } : { partner_paid_at: now }),
-    }).eq("id", match_id);
-
-    // Notify both users
-    await adminClient.from("notifications").insert([
-      {
-        user_id: match.initiator_user_id,
-        type: "contact_revealed",
-        title: "Contact details revealed!",
-        message: "Both users have paid. You can now see each other's contact details.",
-        metadata: { match_id },
-      },
-      {
-        user_id: match.partner_user_id,
-        type: "contact_revealed",
-        title: "Contact details revealed!",
-        message: "Both users have paid. You can now see each other's contact details.",
-        metadata: { match_id },
-      },
-    ]);
-
-    // Update BOTH requests to matched status
-    const { data: matchDetails } = await adminClient
-      .from("matches")
-      .select("initiator_request_id, partner_request_id")
-      .eq("id", match_id)
-      .single();
-
-    if (matchDetails) {
-      await adminClient.from("requests").update({ status: "matched" })
-        .in("id", [matchDetails.initiator_request_id, matchDetails.partner_request_id]);
+    if (status === "cancelled" || status === "failed") {
+      return NextResponse.json(
+        { verified: false, message: "Payment was not completed" },
+        { status: 200 }
+      );
     }
 
-    logger.security.contactRevealed(match_id, user.id);
-    return successResponse({ status: "success", both_paid: true, contact_revealed: true });
-  } else {
-    // Only this user paid — update status
-    const newStatus = isInitiator ? "initiator_paid" : "partner_paid";
-    await adminClient.from("matches").update({
-      status: newStatus,
-      ...(isInitiator ? { initiator_paid_at: now } : { partner_paid_at: now }),
-    }).eq("id", match_id);
+    if (!transaction_id || !tx_ref) {
+      return NextResponse.json(
+        { error: "Missing transaction_id or tx_ref" },
+        { status: 400 }
+      );
+    }
 
-    // Notify the other user
-    await adminClient.from("notifications").insert({
-      user_id: otherUserId,
-      type: "payment_received",
-      title: "Payment received",
-      message: "Your match has paid the connection fee. Pay yours to reveal contact details.",
-      metadata: { match_id },
+    const user = await getServerUser();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const supabase = await createServerClient();
+
+    const { data: payment, error: paymentError } = await supabase
+      .from("payments")
+      .select("id, match_id, user_id, amount_kobo, status")
+      .eq("paystack_reference", tx_ref)
+      .eq("user_id", user.id)
+      .single();
+
+    if (paymentError || !payment) {
+      return NextResponse.json(
+        { error: "Payment record not found" },
+        { status: 404 }
+      );
+    }
+
+    if (payment.status === "success") {
+      const { data: match } = await supabase
+        .from("matches")
+        .select("id, both_paid_at")
+        .eq("id", payment.match_id)
+        .single();
+
+      return NextResponse.json({
+        verified: true,
+        already_verified: true,
+        match_id: payment.match_id,
+        contacts_revealed: !!(match?.both_paid_at),
+      });
+    }
+
+    const verification = await verifyPayment(
+      transaction_id,
+      payment.amount_kobo
+    );
+
+    if (!verification.success) {
+      return NextResponse.json(
+        { error: "Verification request failed" },
+        { status: 502 }
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    if (!verification.verified) {
+      console.warn(
+        "[payment/verify] Verification failed for tx_ref:", tx_ref,
+        { flw_status: verification.status, amount: verification.amount_ngn }
+      );
+
+      await supabase
+        .from("payments")
+        .update({
+          status: "failed",
+          gateway_response: JSON.stringify(
+            verification.raw ?? { status: verification.status }
+          ),
+          updated_at: now,
+        })
+        .eq("id", payment.id);
+
+      return NextResponse.json(
+        { verified: false, message: "Payment could not be verified" },
+        { status: 200 }
+      );
+    }
+
+    const { error: updateError } = await supabase
+      .from("payments")
+      .update({
+        status: "success",
+        verified_at: now,
+        gateway_response: JSON.stringify(verification.raw),
+        channel: (verification.raw?.payment_type as string) ?? null,
+        updated_at: now,
+      })
+      .eq("id", payment.id);
+
+    if (updateError) {
+      console.error("[payment/verify] Failed to update payment:", updateError);
+      return NextResponse.json(
+        { error: "Failed to record payment" },
+        { status: 500 }
+      );
+    }
+
+    const { data: match, error: matchError } = await supabase
+      .from("matches")
+      .select(
+        "id, initiator_user_id, partner_user_id, initiator_paid_at, partner_paid_at, status"
+      )
+      .eq("id", payment.match_id)
+      .single();
+
+    if (matchError || !match) {
+      console.error("[payment/verify] Match not found:", payment.match_id);
+      return NextResponse.json({
+        verified: true,
+        match_id: payment.match_id,
+        contacts_revealed: false,
+      });
+    }
+
+    const isInitiator = match.initiator_user_id === user.id;
+    const matchUpdate: Record<string, unknown> = { updated_at: now };
+
+    if (isInitiator) {
+      matchUpdate.initiator_paid_at = now;
+    } else {
+      matchUpdate.partner_paid_at = now;
+    }
+
+    const otherAlreadyPaid = isInitiator
+      ? !!match.partner_paid_at
+      : !!match.initiator_paid_at;
+
+    let contactsRevealed = false;
+
+    if (otherAlreadyPaid) {
+      matchUpdate.both_paid_at = now;
+      matchUpdate.completed_at = now;
+      matchUpdate.status = "completed";
+      matchUpdate.initiator_contact_revealed = true;
+      matchUpdate.partner_contact_revealed = true;
+      contactsRevealed = true;
+    }
+
+    await supabase
+      .from("matches")
+      .update(matchUpdate)
+      .eq("id", payment.match_id);
+
+    return NextResponse.json({
+      verified: true,
+      match_id: payment.match_id,
+      contacts_revealed: contactsRevealed,
     });
-
-    return successResponse({ status: "success", both_paid: false, contact_revealed: false });
+  } catch (err) {
+    console.error("[payment/verify] Unexpected error:", err);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }
