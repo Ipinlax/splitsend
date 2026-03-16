@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
     const amount_kobo = parseInt(process.env.CONNECTION_FEE_KOBO ?? "200000");
     const amount_ngn = amount_kobo / 100;
 
-    const tx_ref = `splitsend-${match_id}-${user.id}-${Date.now()}`;
+    const tx_ref = `ss-${match_id.slice(0, 8)}-${user.id.slice(0, 8)}-${Date.now()}`;
     const redirect_url = `${process.env.NEXT_PUBLIC_APP_URL}/payment/callback`;
 
     console.log("[payment/initialize] Calling Flutterwave with:", {
