@@ -37,30 +37,35 @@ export async function initializePayment(
   params: InitializePaymentParams
 ): Promise<InitializePaymentResult> {
   try {
+    const payload = {
+      tx_ref: params.tx_ref,
+      amount: params.amount_ngn,
+      currency: "NGN",
+      redirect_url: params.redirect_url,
+      customer: {
+        email: params.email,
+        name: params.full_name,
+        phonenumber: "00000000000",
+      },
+      customizations: {
+        title: "SplitSend",
+        description: params.description ?? "Connect fee — split courier cost",
+      },
+    };
+
+    console.log("[flutterwave] sending payload:", JSON.stringify(payload));
+
     const res = await fetch(`${FLW_BASE_URL}/payments`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${FLW_SECRET_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        tx_ref: params.tx_ref,
-        amount: params.amount_ngn,
-        currency: "NGN",
-        redirect_url: params.redirect_url,
-        customer: {
-          email: params.email,
-          name: params.full_name,
-        },
-        customizations: {
-          title: "SplitSend",
-          description:
-            params.description ?? "Connect fee — split courier cost",
-        },
-      }),
+      body: JSON.stringify(payload),
     });
 
     const data = await res.json();
+    console.log("[flutterwave] raw response:", JSON.stringify(data));
 
     if (data.status === "success" && data.data?.link) {
       return { success: true, payment_url: data.data.link };
@@ -134,3 +139,9 @@ export function verifyWebhookSignature(headerHash: string | null): boolean {
   if (!secretHash || !headerHash) return false;
   return headerHash === secretHash;
 }
+```
+
+Commit → wait for Vercel to deploy → click Pay button → go to **Vercel Logs** → paste the lines starting with:
+```
+[flutterwave] sending payload:
+[flutterwave] raw response:
