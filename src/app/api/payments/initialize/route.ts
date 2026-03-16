@@ -30,6 +30,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    if (!user.email) {
+      return NextResponse.json(
+        { error: "User email not found. Please contact support." },
+        { status: 400 }
+      );
+    }
+
     const supabase = await createServerClient();
 
     const { data: profile, error: profileError } = await supabase
@@ -94,19 +101,27 @@ export async function POST(req: NextRequest) {
     const tx_ref = `splitsend-${match_id}-${user.id}-${Date.now()}`;
     const redirect_url = `${process.env.NEXT_PUBLIC_APP_URL}/payment/callback`;
 
+    console.log("[payment/initialize] Calling Flutterwave with:", {
+      tx_ref,
+      amount_ngn,
+      email: user.email,
+      redirect_url,
+    });
+
     const result = await initializePayment({
       tx_ref,
       amount_ngn,
-      email: user.email!,
+      email: user.email,
       full_name: profile.full_name ?? "SplitSend User",
       redirect_url,
       description: `SplitSend connect fee — Match ${match_id.slice(0, 8)}`,
     });
 
+    console.log("[payment/initialize] Flutterwave result:", result);
+
     if (!result.success || !result.payment_url) {
-      console.error("[payment/initialize] Flutterwave error:", result.error);
       return NextResponse.json(
-        { error: "Failed to initialize payment" },
+        { error: result.error ?? "Failed to initialize payment" },
         { status: 502 }
       );
     }
@@ -143,7 +158,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error("[payment/initialize] Unexpected error:", err);
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: String(err) },
       { status: 500 }
     );
   }
