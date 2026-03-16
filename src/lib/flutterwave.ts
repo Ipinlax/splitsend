@@ -56,7 +56,6 @@ export async function initializePayment(
           title: "SplitSend",
           description:
             params.description ?? "Connect fee — split courier cost",
-          logo: `${process.env.NEXT_PUBLIC_APP_URL}/logo.png`,
         },
       }),
     });
