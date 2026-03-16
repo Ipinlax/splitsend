@@ -139,9 +139,3 @@ export function verifyWebhookSignature(headerHash: string | null): boolean {
   if (!secretHash || !headerHash) return false;
   return headerHash === secretHash;
 }
-```
-
-Commit → wait for Vercel to deploy → click Pay button → go to **Vercel Logs** → paste the lines starting with:
-```
-[flutterwave] sending payload:
-[flutterwave] raw response:
