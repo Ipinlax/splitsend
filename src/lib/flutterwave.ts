@@ -139,3 +139,8 @@ export function verifyWebhookSignature(headerHash: string | null): boolean {
   if (!secretHash || !headerHash) return false;
   return headerHash === secretHash;
 }
+```
+
+**Important:** After pasting, scroll to the very bottom of the editor and make sure the last line is exactly:
+```
+}
